@@ -11,7 +11,7 @@ input,select,button{font:inherit;width:100%;padding:11px;border-radius:10px;bord
 button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}button.alt{background:transparent;color:var(--ac);border:1px solid var(--ac)}
 .row{display:flex;justify-content:space-between;gap:8px;padding:9px 0;border-bottom:1px solid var(--bd);font-size:14px}.row:last-child{border:0}
 .mu{color:var(--mu);font-size:12px}.in{color:var(--ac)}.out{color:var(--rd)}
-.tabs{display:flex;gap:6px;margin-top:12px}.tabs button{margin:0;padding:9px 4px;font-size:13px;background:var(--card);color:var(--tx);border:1px solid var(--bd)}.tabs button.on{background:var(--ac);color:#fff}
+.tabs{display:flex;gap:6px;margin-top:12px}.tabs button{margin:0;padding:9px 2px;font-size:12px;background:var(--card);color:var(--tx);border:1px solid var(--bd)}.tabs button.on{background:var(--ac);color:#fff}
 .sw{display:flex;gap:6px;margin-top:10px}.sw button{margin:0;padding:8px;font-size:13px;background:rgba(255,255,255,.2)}.sw button.on{background:#fff;color:#0b6b4a}
 #qr{display:flex;justify-content:center;padding:14px;background:#fff;border-radius:12px;margin-top:8px}#qr img{max-width:100%}
 video{width:100%;border-radius:12px;margin-top:8px}#msg{margin-top:8px;font-size:13px;min-height:18px}
@@ -29,12 +29,16 @@ const firebaseConfig={apiKey:"AIzaSyCaHHR9mQ3QmGbWEuytph_qpvd8KxOyAbM",authDomai
 /* ===== 2) อีเมล Google ของเจ้าของธนาคารกลาง (ต้องตรงกับใน firestore.rules) ===== */
 const OWNER_EMAIL="waveqezxc@gmail.com";
 const SUPPLY=100000;
-const PRICES=[["Cobblestone / หินกลม",1],["Coal / ถ่าน",2],["Copper Ingot / ทองแดง",2],["Redstone / เรดสโตน",3],["Lapis / ลาพิส",4],["Iron Ingot / เหล็ก",8],["Gold Ingot / ทอง",15],["Emerald / มรกต",30],["Diamond / เพชร",100],["Shulker Shell / เปลือกชัลเกอร์",150],["Netherite Scrap / เศษเนเธอไรต์",200],["Trident / ตรีศูล",500],["Golden Apple (Ench.) / แอปเปิลทองเวทมนตร์",600],["Totem of Undying / โทเทม",800],["Netherite Ingot / แท่งเนเธอไรต์",900],["Elytra / ปีก",1500],["Beacon / บีคอน",1500]];
+const PRICES=[["Cobblestone / หินกลม",1,1000],["Coal / ถ่าน",2,500],["Copper Ingot / ทองแดง",2,500],["Redstone / เรดสโตน",3,400],["Lapis / ลาพิส",4,300],["Iron Ingot / เหล็ก",8,200],["Gold Ingot / ทอง",15,150],["Emerald / มรกต",30,100],["Diamond / เพชร",100,50],["Shulker Shell / เปลือกชัลเกอร์",150,20],["Netherite Scrap / เศษเนเธอไรต์",200,15],["Trident / ตรีศูล",500,10],["Golden Apple (Ench.) / แอปเปิลทองเวทมนตร์",600,10],["Totem of Undying / โทเทม",800,10],["Netherite Ingot / แท่งเนเธอไรต์",900,8],["Elytra / ปีก",1500,3],["Beacon / บีคอน",1500,3]];
 
+// ราคาขาย = ราคากลาง x clamp(sqrt(เป้าหมาย/ของในคลัง), 0.5, 3)  (ต้องตรงกับ firestore.rules)
+const px=(b,t,q)=>Math.max(1,Math.round(b*Math.min(3,Math.max(0.5,Math.sqrt(t/Math.max(q,1))))));
+const bankBuy=p=>Math.max(1,Math.round(p*0.8));
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
-let me=null,acts={},txs=[],acting='me',tab='home',preTo=new URLSearchParams(location.search).get('to'),stream=null,scanning=false,started=false;
+let me=null,acts={},txs=[],mints=[],stock={},acting='me',tab='home',preTo=new URLSearchParams(location.search).get('to'),stream=null,scanning=false,started=false;
 const $=s=>document.querySelector(s),fmt=n=>(n||0).toLocaleString('th-TH');
 const esc=s=>String(s).replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));
+const issued=()=>acts.central?SUPPLY+mints.reduce((a,m)=>a+(m.a||0),0):0;
 const isOwner=()=>me&&me.email===OWNER_EMAIL;
 const curId=()=>acting==='central'?'central':me.uid;
 const nm=id=>id==='central'?'🏦 ธนาคารกลาง':(id===me.uid?'ฉัน':(acts[id]?.name||'สมาชิก'));
@@ -47,28 +51,39 @@ onAuthStateChanged(auth,async u=>{
   if(!started){started=true;
     onSnapshot(collection(db,'users'),s=>{acts={};s.docs.forEach(d=>acts[d.id]=d.data());render()});
     onSnapshot(query(collection(db,'tx'),orderBy('t','desc'),limit(100)),s=>{txs=s.docs.map(d=>d.data());render()});
+    onSnapshot(collection(db,'mints'),s=>{mints=s.docs.map(d=>d.data());render()});
+    onSnapshot(collection(db,'stock'),s=>{stock={};s.docs.forEach(d=>stock[d.id]=d.data());render()});
   }
 });
 function login(){$('#app').innerHTML=`<div class="hero"><small>BlockBank · ธนาคารกลางบล็อก</small><div class="bal">🪙</div><small>เข้าสู่ระบบเพื่อเริ่มใช้งาน</small></div><div class="card"><button id="gl">เข้าสู่ระบบด้วย Google</button><div id="msg"></div></div>`;
   $('#gl').onclick=()=>signInWithPopup(auth,new GoogleAuthProvider()).catch(e=>$('#msg').textContent=e.message)}
 
 function render(){
-  if(!me)return;const cid=curId(),acc=acts[cid];let h='';
+  if(!me)return;if(tab==='shop'&&acting!=='me')tab='home';
+  if(tab==='inv'&&acting!=='central')tab='home';
+  const cid=curId(),acc=acts[cid];let h='';
   h+=`<div class="hero"><small>${acting==='central'?'บัญชีธนาคารกลาง':esc(me.displayName||'บัญชีส่วนบุคคล')}</small><div class="bal">🪙 ${acc?fmt(acc.bal):'—'}</div><small>${acting==='central'?'ไอดีธนาคารกลาง':esc(me.email)}</small>`;
   if(isOwner())h+=`<div class="sw"><button class="${acting==='me'?'on':''}" onclick="sw('me')">ไอดีบุคคล</button><button class="${acting==='central'?'on':''}" onclick="sw('central')">ไอดีธนาคารกลาง</button></div>`;
-  h+=`</div><div class="tabs">${[['home','โอน'],['recv','รับ (QR)'],['scan','สแกน'],['hist','ประวัติ'],['mkt','ราคา']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="tb('${k}')">${l}</button>`).join('')}</div>`;
+  h+=`</div><div class="tabs">${[['home','โอน'],...(acting==='me'?[['shop','ร้านค้า']]:[['inv','คลัง']]),['recv','QR'],['scan','สแกน'],['hist','ประวัติ'],['mkt','ราคา']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="tb('${k}')">${l}</button>`).join('')}</div>`;
   if(tab!=='scan')stopScan();
   if(isOwner()&&!acts.central)h+=`<div class="card"><h3>เจ้าของระบบ</h3><button onclick="mint()">สร้างธนาคารกลาง + ออกเหรียญ ${fmt(SUPPLY)}</button></div>`;
   if(tab==='home'){
     const opts=Object.keys(acts).filter(i=>i!==cid).map(i=>`<option value="${i}" ${i===preTo?'selected':''}>${esc(nm(i))}</option>`).join('');
     h+=`<div class="card"><h3>โอนเหรียญ</h3><select id="to"><option value="">เลือกผู้รับ</option>${opts}</select><input id="amt" type="number" min="1" inputmode="numeric" placeholder="จำนวนเหรียญ"><input id="note" maxlength="100" placeholder="หมายเหตุ เช่น ขายเพชร 2 เม็ด"><button onclick="send()">โอน</button><div id="msg"></div></div>`;
-    h+=`<div class="card mu">เหรียญทั้งระบบ ${fmt(Object.values(acts).reduce((a,b)=>a+(b.bal||0),0))} / ออกทั้งหมด ${fmt(SUPPLY)} · สมาชิก ${Object.keys(acts).filter(i=>i!=='central').length} คน<br><a href="#" onclick="signOutNow();return false" style="color:var(--mu)">ออกจากระบบ</a></div>`;
+    if(acting==='central'&&acts.central)h+=`<div class="card"><h3>ออกเหรียญเพิ่มเข้าธนาคารกลาง</h3><input id="madd" type="number" min="1" inputmode="numeric" placeholder="จำนวนเหรียญที่จะออกเพิ่ม"><input id="mnote" maxlength="100" placeholder="เหตุผล เช่น เพิ่มสภาพคล่อง"><button onclick="mintMore()">ออกเหรียญเพิ่ม</button><div class="mu" style="margin-top:6px">บันทึกถาวรและนับรวมในยอด "ออกทั้งหมด" ที่ทุกคนเห็น</div></div>`;
+    h+=`<div class="card mu">เหรียญทั้งระบบ ${fmt(Object.values(acts).reduce((a,b)=>a+(b.bal||0),0))} / ออกทั้งหมด ${fmt(issued())} · สมาชิก ${Object.keys(acts).filter(i=>i!=='central').length} คน${mints.length?` · ออกเพิ่ม ${mints.length} ครั้ง`:''}<br><a href="#" onclick="signOutNow();return false" style="color:var(--mu)">ออกจากระบบ</a></div>`;
+  }
+  if(tab==='shop')h+=`<div class="card"><h3>🏦 ซื้อของจากธนาคารกลาง</h3><div class="mu" style="margin-bottom:6px">ราคาขึ้นลงตามของในคลัง ยิ่งเหลือน้อยยิ่งแพง · จ่ายแล้วเจ้าของจะส่งของให้ใน Minecraft</div>${Object.keys(stock).length?PRICES.map(([n],i)=>{const s=stock[i];if(!s)return '';const p=px(s.b,s.t,s.q);return `<div class="row"><div>${n}<div class="mu">${fmt(p)} เหรียญ/ชิ้น · เหลือ ${fmt(s.q)}</div></div>${s.q>0?`<div style="display:flex;gap:6px;align-items:center"><input id="q${i}" type="number" min="1" max="${s.q}" value="1" style="width:64px;margin:0;padding:8px"><button style="width:auto;margin:0;padding:8px 14px" onclick="buy(${i})">ซื้อ</button></div>`:'<b class="out">หมด</b>'}</div>`}).join(''):'<div class="mu">ธนาคารกลางยังไม่เปิดคลังสินค้า</div>'}<div id="msg"></div></div>`;
+  if(tab==='inv'){
+    const pl=Object.keys(acts).filter(i=>i!=='central').map(i=>`<option value="${i}">${esc(nm(i))}</option>`).join('');
+    h+=`<div class="card"><h3>รับซื้อของจากผู้เล่น</h3><select id="bp"><option value="">เลือกผู้เล่น</option>${pl}</select><select id="bi">${PRICES.map(([n],i)=>`<option value="${i}">${n}</option>`).join('')}</select><input id="bq" type="number" min="1" inputmode="numeric" placeholder="จำนวนชิ้น"><button onclick="bankBuyIn()">รับซื้อ (จ่ายเหรียญ + เพิ่มสต็อก)</button><div class="mu" style="margin-top:6px">จ่ายที่ 80% ของราคาขายตอนนี้ ของเข้าคลังอัตโนมัติ</div><div id="msg"></div></div>`;
+    h+=`<div class="card"><h3>คลังสินค้า</h3>${Object.keys(stock).length?PRICES.map(([n],i)=>{const s=stock[i];if(!s)return '';return `<div class="row"><div>${n}<div class="mu">ราคาขายตอนนี้ ${fmt(px(s.b,s.t,s.q))} · เป้าหมาย ${fmt(s.t)}</div></div><div style="display:flex;gap:6px;align-items:center"><input id="s${i}" type="number" min="0" value="${s.q}" style="width:72px;margin:0;padding:8px"><button style="width:auto;margin:0;padding:8px 12px" onclick="setStock(${i})">บันทึก</button></div></div>`}).join(''):'<button onclick="initStock()">เริ่มต้นคลังสินค้า</button>'}<div class="mu" style="margin-top:6px">แก้จำนวนเองได้ เช่น ของที่ฟาร์มมาเอง</div></div>`;
   }
   if(tab==='recv')h+=`<div class="card"><h3>QR รับเหรียญของ ${esc(nm(cid)==='ฉัน'?(me.displayName||'ฉัน'):nm(cid))}</h3><div id="qr"></div><div class="mu" style="margin-top:8px">ให้เพื่อนสแกนด้วยแท็บ "สแกน" หรือกล้องมือถือ ก็จะเปิดหน้าโอนพร้อมเลือกชื่อคุณให้เลย</div><button class="alt" onclick="copyLink()">คัดลอกลิงก์รับเหรียญ</button></div>`;
   if(tab==='scan')h+=`<div class="card"><h3>สแกน QR เพื่อโอน</h3><video id="v" playsinline muted></video><div id="msg" class="mu">กำลังเปิดกล้อง…</div></div>`;
   if(tab==='hist'){const mine=txs.filter(x=>x.f===cid||x.to===cid);
     h+=`<div class="card"><h3>ประวัติธุรกรรม</h3>${mine.length?mine.map(x=>{const o=x.f===cid;return `<div class="row"><div>${o?'โอนให้':'รับจาก'} ${esc(nm(o?x.to:x.f))}<div class="mu">${x.t?x.t.toDate().toLocaleString('th-TH'):''}${x.n?' · '+esc(x.n):''}</div></div><b class="${o?'out':'in'}">${o?'−':'+'}${fmt(x.a)}</b></div>`}).join(''):'<div class="mu">ยังไม่มีรายการ</div>'}</div>`}
-  if(tab==='mkt')h+=`<div class="card"><h3>ราคากลางเริ่มต้น (เหรียญ/ชิ้น)</h3>${PRICES.map(([n,p])=>`<div class="row"><span>${n}</span><b>${fmt(p)}</b></div>`).join('')}</div>`;
+  if(tab==='mkt')h+=`<div class="card"><h3>ราคาตอนนี้ (เหรียญ/ชิ้น)</h3><div class="row mu"><span>ของ (เหลือในคลัง)</span><span>ธนาคารขาย / รับซื้อ</span></div>${PRICES.map(([n,b],i)=>{const s=stock[i],p=s?px(s.b,s.t,s.q):b;return `<div class="row"><span>${n}${s?` <span class="mu">(${fmt(s.q)})</span>`:''}</span><b>${fmt(p)} / ${fmt(bankBuy(p))}</b></div>`}).join('')}<div class="mu" style="margin-top:8px">ราคาปรับอัตโนมัติตามของในคลัง (0.5–3 เท่าของราคากลาง) ธนาคารรับซื้อที่ 80% ของราคาขาย อยากขายของให้ธนาคาร: ส่งของให้เจ้าของใน Minecraft แล้วเจ้าของจะบันทึกและโอนเหรียญให้</div></div>`;
   $('#app').innerHTML=h;
   if(tab==='recv'){new QRCode($('#qr'),{text:payUrl(cid),width:220,height:220,correctLevel:QRCode.CorrectLevel.M})}
   if(tab==='scan')startScan();
@@ -89,10 +104,8 @@ window.copyLink=async()=>{await navigator.clipboard.writeText(payUrl(curId()));a
 window.mint=async()=>{if(acts.central||!confirm('ออกเหรียญ '+fmt(SUPPLY)+' เข้าธนาคารกลาง? ทำได้ครั้งเดียว'))return;
   try{await setDoc(doc(db,'users','central'),{name:'ธนาคารกลาง',bal:SUPPLY,at:serverTimestamp()})}catch(e){alert('ไม่สำเร็จ: '+e.message)}};
 let busy=false;
-window.send=async()=>{
-  if(busy)return;const to=$('#to').value,a=Math.floor(+$('#amt').value),n=$('#note').value.trim(),f=curId(),m=$('#msg');
-  if(!to||!(a>0)){m.textContent='เลือกผู้รับและใส่จำนวนให้ถูกต้อง';return}
-  busy=true;m.textContent='กำลังโอน…';
+async function doTransfer(f,to,a,n,m,extra){
+  if(busy)return false;busy=true;m.textContent='กำลังดำเนินการ…';let ok=false;
   try{
     const [s1,s2]=await Promise.all([getDoc(doc(db,'users',f)),getDoc(doc(db,'users',to))]);
     if(!s2.exists())throw new Error('ไม่พบบัญชีผู้รับ');
@@ -101,8 +114,55 @@ window.send=async()=>{
     b.set(doc(db,'tx',id),{f,to,a,n,t:serverTimestamp()});
     b.update(doc(db,'users',f),{bal:b1-a,last:id});
     b.update(doc(db,'users',to),{bal:b2+a,last:id});
-    await b.commit();preTo=null;m.textContent='✅ โอนสำเร็จ';$('#amt').value='';$('#note').value='';
+    if(extra)extra(b,id);
+    await b.commit();ok=true;m.textContent='✅ สำเร็จ';
   }catch(e){m.textContent='❌ '+(e.message||'ผิดพลาด')}
+  busy=false;return ok;
+}
+window.send=async()=>{
+  const to=$('#to').value,a=Math.floor(+$('#amt').value),n=$('#note').value.trim(),m=$('#msg');
+  if(!to||!(a>0)){m.textContent='เลือกผู้รับและใส่จำนวนให้ถูกต้อง';return}
+  if(await doTransfer(curId(),to,a,n,m)){preTo=null;const x=$('#amt'),y=$('#note');if(x)x.value='';if(y)y.value=''}
+};
+window.buy=async i=>{
+  const m=$('#msg'),k=Math.floor(+$('#q'+i).value),n=PRICES[i][0];
+  if(!(k>0)||k>10000){m.textContent='ใส่จำนวนให้ถูกต้อง';return}
+  const sd=(await getDoc(doc(db,'stock',String(i)))).data();
+  if(!sd||sd.q<k){m.textContent='ของในคลังไม่พอ (เหลือ '+(sd?sd.q:0)+')';return}
+  const unit=px(sd.b,sd.t,sd.q),total=unit*k;
+  if(!confirm('ซื้อ '+n+' ×'+k+' ราคา '+fmt(unit)+'/ชิ้น รวม '+fmt(total)+' เหรียญ?'))return;
+  if(await doTransfer(me.uid,'central',total,('ซื้อ: '+n+' ×'+k).slice(0,100),m,(b,id)=>b.update(doc(db,'stock',String(i)),{q:sd.q-k,last:id})))alert('✅ ซื้อสำเร็จ แจ้งเจ้าของธนาคารให้ส่งของใน Minecraft');
+};
+window.bankBuyIn=async()=>{
+  const to=$('#bp').value,i=+$('#bi').value,k=Math.floor(+$('#bq').value),m=$('#msg');
+  if(!to||!(k>0)){m.textContent='เลือกผู้เล่นและใส่จำนวน';return}
+  const sd=(await getDoc(doc(db,'stock',String(i)))).data();
+  if(!sd){m.textContent='ยังไม่ได้เริ่มต้นคลังสินค้า';return}
+  const unit=bankBuy(px(sd.b,sd.t,sd.q)),total=unit*k,n=PRICES[i][0];
+  if(!confirm('รับซื้อ '+n+' ×'+k+' จ่าย '+fmt(total)+' เหรียญ ('+fmt(unit)+'/ชิ้น)?'))return;
+  if(await doTransfer('central',to,total,('รับซื้อ: '+n+' ×'+k).slice(0,100),m,b=>b.update(doc(db,'stock',String(i)),{q:sd.q+k})))alert('✅ รับซื้อแล้ว สต็อกเพิ่ม '+k);
+};
+window.initStock=async()=>{
+  if(!confirm('เริ่มต้นคลังสินค้า (ของทุกอย่างเริ่มที่ 0 ชิ้น)?'))return;
+  const b=writeBatch(db);PRICES.forEach(([n,base,t],i)=>b.set(doc(db,'stock',String(i)),{q:0,t,b:base}));
+  try{await b.commit()}catch(e){alert('❌ '+e.message)}
+};
+window.setStock=async i=>{
+  const s=stock[i],q=Math.floor(+$('#s'+i).value);
+  if(!s||!(q>=0)){alert('ใส่จำนวนให้ถูกต้อง');return}
+  try{await setDoc(doc(db,'stock',String(i)),{q,t:s.t,b:s.b})}catch(e){alert('❌ '+e.message)}
+};
+window.mintMore=async()=>{
+  const a=Math.floor(+$('#madd').value),n=$('#mnote').value.trim().slice(0,100),m=$('#msg')||{};
+  if(!(a>0)){alert('ใส่จำนวนเหรียญ');return}
+  if(!confirm('ออกเหรียญเพิ่ม '+fmt(a)+' เข้าธนาคารกลาง?')||busy)return;
+  busy=true;
+  try{
+    const s=await getDoc(doc(db,'users','central')),id=Date.now()+'-'+Math.random().toString(36).slice(2,8),b=writeBatch(db);
+    b.set(doc(db,'mints',id),{a,n,t:serverTimestamp()});
+    b.update(doc(db,'users','central'),{bal:s.data().bal+a,last:id});
+    await b.commit();alert('✅ ออกเหรียญเพิ่มแล้ว');
+  }catch(e){alert('❌ '+(e.message||'ผิดพลาด'))}
   busy=false;
 };
 </script></body></html>
