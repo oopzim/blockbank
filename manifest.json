@@ -1,0 +1,16 @@
+{
+  "name": "BlockBank · ธนาคารกลางบล็อก",
+  "short_name": "BlockBank",
+  "description": "ธนาคารเหรียญสำหรับซื้อขายของใน Minecraft",
+  "start_url": "./index.html",
+  "scope": "./",
+  "display": "standalone",
+  "orientation": "portrait",
+  "background_color": "#0e1612",
+  "theme_color": "#0f8a5f",
+  "lang": "th",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png", "purpose": "any maskable"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}

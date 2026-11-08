@@ -1,5 +1,6 @@
 <!DOCTYPE html>
 <html lang="th"><head><meta charset="utf-8"><title>BlockBank · ธนาคารกลางบล็อก</title>
+<link rel="manifest" href="manifest.json"><meta name="theme-color" content="#0f8a5f"><link rel="icon" href="icon-192.png"><link rel="apple-touch-icon" href="icon-192.png"><meta name="apple-mobile-web-app-capable" content="yes"><meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-title" content="BlockBank">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <style>
 :root{--bg:#f3f6f4;--card:#fff;--tx:#14231b;--mu:#66766d;--ac:#0f8a5f;--ac2:#0b6b4a;--bd:#dde6e1;--rd:#c2410c}
@@ -165,4 +166,5 @@ window.mintMore=async()=>{
   }catch(e){alert('❌ '+(e.message||'ผิดพลาด'))}
   busy=false;
 };
+if('serviceWorker' in navigator)navigator.serviceWorker.register('sw.js').catch(()=>{});
 </script></body></html>
