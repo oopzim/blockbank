@@ -16,6 +16,7 @@ button{background:var(--ac);color:#fff;border:0;font-weight:600;cursor:pointer}b
 .sw{display:flex;gap:6px;margin-top:10px}.sw button{margin:0;padding:8px;font-size:13px;background:rgba(255,255,255,.2)}.sw button.on{background:#fff;color:#0b6b4a}
 #qr{display:flex;justify-content:center;padding:14px;background:#fff;border-radius:12px;margin-top:8px}#qr img{max-width:100%}
 video{width:100%;border-radius:12px;margin-top:8px}#msg{margin-top:8px;font-size:13px;min-height:18px}
+#toast{position:fixed;top:max(10px,env(safe-area-inset-top));left:50%;transform:translateX(-50%);width:calc(100% - 28px);max-width:480px;background:var(--ac2);color:#fff;padding:12px 14px;border-radius:12px;z-index:50;box-shadow:0 6px 20px rgba(0,0,0,.35);font-size:14px;cursor:pointer}
 </style></head><body>
 <div id="app">กำลังโหลด…</div>
 <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
@@ -51,11 +52,47 @@ onAuthStateChanged(auth,async u=>{
   if(!(await getDoc(ref)).exists())await setDoc(ref,{name:u.displayName||u.email.split('@')[0],bal:0,at:serverTimestamp()});
   if(!started){started=true;
     onSnapshot(collection(db,'users'),s=>{acts={};s.docs.forEach(d=>acts[d.id]=d.data());render()});
-    onSnapshot(query(collection(db,'tx'),orderBy('t','desc'),limit(100)),s=>{txs=s.docs.map(d=>d.data());render()});
+    onSnapshot(query(collection(db,'tx'),orderBy('t','desc'),limit(100)),s=>{txs=s.docs.map(d=>d.data());checkNotify();render()});
     onSnapshot(collection(db,'mints'),s=>{mints=s.docs.map(d=>d.data());render()});
     onSnapshot(collection(db,'stock'),s=>{stock={};s.docs.forEach(d=>stock[d.id]=d.data());render()});
   }
 });
+
+/* ===== ระบบแจ้งเตือน ===== */
+const LS={get:k=>{try{return localStorage.getItem(k)}catch(e){return null}},set:(k,v)=>{try{localStorage.setItem(k,String(v))}catch(e){}}};
+let initialDone=false;const told=new Set();
+const tsOf=x=>x.t?x.t.seconds:0;
+const fromSelf=x=>x.f===me.uid||(x.f==='central'&&isOwner());
+const forMe=x=>!fromSelf(x)&&(x.to===me.uid||(isOwner()&&x.to==='central'));
+const seenKey=()=>'bb_seen_'+me.uid;
+const unread=()=>{if(!me||LS.get(seenKey())===null)return 0;const seen=+LS.get(seenKey());return txs.filter(x=>forMe(x)&&tsOf(x)>seen).length};
+function markSeen(){if(me&&txs.length)LS.set(seenKey(),Math.max(+LS.get(seenKey())||0,...txs.map(tsOf)))}
+const msgOf=x=>x.to==='central'&&(x.n||'').startsWith('ซื้อ:')?`🛒 ${nm(x.f)} ${x.n} (+${fmt(x.a)} เหรียญ)`:`🪙 ได้รับ ${fmt(x.a)} เหรียญ จาก ${nm(x.f)}${x.n?' · '+x.n:''}`;
+function toast(t){const d=document.createElement('div');d.id='toast';d.textContent=t;d.onclick=()=>{d.remove();tb('hist')};document.body.appendChild(d);setTimeout(()=>d.remove(),6000)}
+function sysNotify(t){
+  if(!('Notification' in window)||Notification.permission!=='granted')return;
+  const o={body:t,icon:'icon-192.png',badge:'icon-192.png',tag:'bb',renotify:true,vibrate:[200,100,200]};
+  const fb=()=>{try{new Notification('BlockBank',o)}catch(e){}};
+  if(navigator.serviceWorker)navigator.serviceWorker.ready.then(r=>r.showNotification('BlockBank',o)).catch(fb);else fb();
+}
+function checkNotify(){
+  if(!me)return;
+  if(LS.get(seenKey())===null){LS.set(seenKey(),Math.max(0,...txs.map(tsOf)));initialDone=true;return}
+  const seen=+LS.get(seenKey());
+  txs.filter(x=>forMe(x)&&tsOf(x)>seen).reverse().forEach(x=>{
+    const id=tsOf(x)+x.f+x.a;if(told.has(id))return;told.add(id);
+    if(initialDone){const t=msgOf(x);toast(t);if(document.hidden)sysNotify(t)}
+  });
+  if(!initialDone){initialDone=true;const u=unread();if(u)toast(`📬 มีรายการเข้าใหม่ ${u} รายการตั้งแต่ครั้งก่อน`)}
+  if(tab==='hist')markSeen();
+}
+function notifCard(){
+  if(!('Notification' in window))return '';
+  if(Notification.permission==='default')return `<div class="card"><h3>🔔 แจ้งเตือน</h3><div class="mu">รับแจ้งเตือนเมื่อมีคนโอนเหรียญให้${isOwner()?' หรือมีคนซื้อของ':''}</div><button onclick="askNotif()">เปิดการแจ้งเตือน</button></div>`;
+  if(Notification.permission==='denied')return `<div class="card mu">🔕 การแจ้งเตือนถูกปิดไว้ เปิดได้ที่การตั้งค่าเบราว์เซอร์หรือแอพ → การแจ้งเตือน</div>`;
+  return '';
+}
+window.askNotif=async()=>{try{await Notification.requestPermission()}catch(e){}render()};
 function login(){$('#app').innerHTML=`<div class="hero"><small>BlockBank · ธนาคารกลางบล็อก</small><div class="bal">🪙</div><small>เข้าสู่ระบบเพื่อเริ่มใช้งาน</small></div><div class="card"><button id="gl">เข้าสู่ระบบด้วย Google</button><div id="msg"></div></div>`;
   $('#gl').onclick=()=>signInWithPopup(auth,new GoogleAuthProvider()).catch(e=>$('#msg').textContent=e.message)}
 
@@ -65,10 +102,11 @@ function render(){
   const cid=curId(),acc=acts[cid];let h='';
   h+=`<div class="hero"><small>${acting==='central'?'บัญชีธนาคารกลาง':esc(me.displayName||'บัญชีส่วนบุคคล')}</small><div class="bal">🪙 ${acc?fmt(acc.bal):'—'}</div><small>${acting==='central'?'ไอดีธนาคารกลาง':esc(me.email)}</small>`;
   if(isOwner())h+=`<div class="sw"><button class="${acting==='me'?'on':''}" onclick="sw('me')">ไอดีบุคคล</button><button class="${acting==='central'?'on':''}" onclick="sw('central')">ไอดีธนาคารกลาง</button></div>`;
-  h+=`</div><div class="tabs">${[['home','โอน'],...(acting==='me'?[['shop','ร้านค้า']]:[['inv','คลัง']]),['recv','QR'],['scan','สแกน'],['hist','ประวัติ'],['mkt','ราคา']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="tb('${k}')">${l}</button>`).join('')}</div>`;
+  h+=`</div><div class="tabs">${[['home','โอน'],...(acting==='me'?[['shop','ร้านค้า']]:[['inv','คลัง']]),['recv','QR'],['scan','สแกน'],['hist','ประวัติ'+(unread()?' •'+unread():'')],['mkt','ราคา']].map(([k,l])=>`<button class="${tab===k?'on':''}" onclick="tb('${k}')">${l}</button>`).join('')}</div>`;
   if(tab!=='scan')stopScan();
   if(isOwner()&&!acts.central)h+=`<div class="card"><h3>เจ้าของระบบ</h3><button onclick="mint()">สร้างธนาคารกลาง + ออกเหรียญ ${fmt(SUPPLY)}</button></div>`;
   if(tab==='home'){
+    h+=notifCard();
     const opts=Object.keys(acts).filter(i=>i!==cid).map(i=>`<option value="${i}" ${i===preTo?'selected':''}>${esc(nm(i))}</option>`).join('');
     h+=`<div class="card"><h3>โอนเหรียญ</h3><select id="to"><option value="">เลือกผู้รับ</option>${opts}</select><input id="amt" type="number" min="1" inputmode="numeric" placeholder="จำนวนเหรียญ"><input id="note" maxlength="100" placeholder="หมายเหตุ เช่น ขายเพชร 2 เม็ด"><button onclick="send()">โอน</button><div id="msg"></div></div>`;
     if(acting==='central'&&acts.central)h+=`<div class="card"><h3>ออกเหรียญเพิ่มเข้าธนาคารกลาง</h3><input id="madd" type="number" min="1" inputmode="numeric" placeholder="จำนวนเหรียญที่จะออกเพิ่ม"><input id="mnote" maxlength="100" placeholder="เหตุผล เช่น เพิ่มสภาพคล่อง"><button onclick="mintMore()">ออกเหรียญเพิ่ม</button><div class="mu" style="margin-top:6px">บันทึกถาวรและนับรวมในยอด "ออกทั้งหมด" ที่ทุกคนเห็น</div></div>`;
@@ -100,7 +138,7 @@ async function startScan(){
       requestAnimationFrame(loop)};loop();
   }catch(e){m.textContent='เปิดกล้องไม่ได้ (ต้องอนุญาตกล้อง และเปิดผ่าน https)'}
 }
-window.tb=k=>{tab=k;render()};window.sw=k=>{acting=k;render()};window.signOutNow=()=>signOut(auth);
+window.tb=k=>{tab=k;if(k==='hist')markSeen();render()};window.sw=k=>{acting=k;render()};window.signOutNow=()=>signOut(auth);
 window.copyLink=async()=>{await navigator.clipboard.writeText(payUrl(curId()));alert('คัดลอกแล้ว')};
 window.mint=async()=>{if(acts.central||!confirm('ออกเหรียญ '+fmt(SUPPLY)+' เข้าธนาคารกลาง? ทำได้ครั้งเดียว'))return;
   try{await setDoc(doc(db,'users','central'),{name:'ธนาคารกลาง',bal:SUPPLY,at:serverTimestamp()})}catch(e){alert('ไม่สำเร็จ: '+e.message)}};
