@@ -24,7 +24,7 @@ video{width:100%;border-radius:12px;margin-top:8px}#msg{margin-top:8px;font-size
 <script type="module">
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithRedirect,getRedirectResult,onAuthStateChanged,signOut} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import {getFirestore,doc,collection,onSnapshot,getDoc,setDoc,writeBatch,query,orderBy,limit,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
+import {getFirestore,doc,collection,onSnapshot,getDoc,setDoc,writeBatch,deleteDoc,query,orderBy,limit,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 /* ===== 1) ใส่ค่าจาก Firebase Console (Project settings > Your apps > Web) ===== */
 const firebaseConfig={apiKey:"AIzaSyCaHHR9mQ3QmGbWEuytph_qpvd8KxOyAbM",authDomain:"blockbank-d14e6.firebaseapp.com",projectId:"blockbank-d14e6",storageBucket:"blockbank-d14e6.firebasestorage.app",messagingSenderId:"54481235501",appId:"1:54481235501:web:0f603fb09a46d6a07812a4"};
@@ -33,8 +33,13 @@ const OWNER_EMAIL="waveqezxc@gmail.com";
 const SUPPLY=100000;
 const PRICES=[["Cobblestone / หินกลม",1,1000],["Coal / ถ่าน",2,500],["Copper Ingot / ทองแดง",2,500],["Redstone / เรดสโตน",3,400],["Lapis / ลาพิส",4,300],["Iron Ingot / เหล็ก",8,200],["Gold Ingot / ทอง",15,150],["Emerald / มรกต",30,100],["Diamond / เพชร",100,50],["Shulker Shell / เปลือกชัลเกอร์",150,20],["Netherite Scrap / เศษเนเธอไรต์",200,15],["Trident / ตรีศูล",500,10],["Golden Apple (Ench.) / แอปเปิลทองเวทมนตร์",600,10],["Totem of Undying / โทเทม",800,10],["Netherite Ingot / แท่งเนเธอไรต์",900,8],["Elytra / ปีก",1500,3],["Beacon / บีคอน",1500,3]];
 
-// ราคาขาย = ราคากลาง x clamp(sqrt(เป้าหมาย/ของในคลัง), 0.5, 3)  (ต้องตรงกับ firestore.rules)
-const px=(b,t,q)=>Math.max(1,Math.round(b*Math.min(3,Math.max(0.5,Math.sqrt(t/Math.max(q,1))))));
+// ราคาขาย = ราคากลาง x clamp((เป้าหมาย/ของในคลัง)^ความไว, ต่ำสุด, สูงสุด)  (ต้องตรงกับ firestore.rules)
+const px=(b,t,q,lo,hi,e)=>Math.max(1,Math.round(b*Math.min(hi,Math.max(lo,Math.pow(t/Math.max(q,1),e)))));
+const pr=s=>px(s.b,s.t,s.q,s.lo??0.5,s.hi??3,s.e??0.5);
+const nameOf=(id,s)=>s.name||(PRICES[+id]?PRICES[+id][0]:'ไอเทม');
+const items=()=>Object.entries(stock).map(([id,s])=>({...s,id,name:nameOf(id,s)})).sort((x,y)=>(x.o??(+x.id||0))-(y.o??(+y.id||0)));
+const curveFields=(p,v)=>`<div class="mu" style="margin-top:6px">ราคาต่ำสุด (เท่าของราคากลาง)</div><input id="${p}_lo" type="number" step="0.05" min="0.05" max="1" value="${v.lo}"><div class="mu">ราคาสูงสุด (เท่าของราคากลาง)</div><input id="${p}_hi" type="number" step="0.5" min="1" max="20" value="${v.hi}"><div class="mu">ความไวของราคา (0.2 นิ่ง · 0.5 ปกติ · 1 ขึ้นลงแรง)</div><input id="${p}_e" type="number" step="0.1" min="0.1" max="3" value="${v.e}">`;
+const openIds=new Set();let pendingRender=false;
 const bankBuy=p=>Math.max(1,Math.round(p*0.8));
 const app=initializeApp(firebaseConfig),auth=getAuth(app),db=getFirestore(app);
 let me=null,acts={},txs=[],mints=[],stock={},acting='me',tab='home',preTo=new URLSearchParams(location.search).get('to'),stream=null,scanning=false,started=false;
@@ -55,10 +60,10 @@ onAuthStateChanged(auth,async u=>{
   }catch(e){showErr(e);return}
   setTimeout(()=>{if(!loaded)showErr({code:'permission-denied',message:'โหลดข้อมูลไม่สำเร็จ'})},10000);
   if(!started){started=true;
-    onSnapshot(collection(db,'users'),s=>{loaded=true;acts={};s.docs.forEach(d=>acts[d.id]=d.data());render()},e=>showErr(e));
-    onSnapshot(query(collection(db,'tx'),orderBy('t','desc'),limit(100)),s=>{txs=s.docs.map(d=>d.data());checkNotify();render()});
-    onSnapshot(collection(db,'mints'),s=>{mints=s.docs.map(d=>d.data());render()});
-    onSnapshot(collection(db,'stock'),s=>{stock={};s.docs.forEach(d=>stock[d.id]=d.data());render()});
+    onSnapshot(collection(db,'users'),s=>{loaded=true;acts={};s.docs.forEach(d=>acts[d.id]=d.data());softRender()},e=>showErr(e));
+    onSnapshot(query(collection(db,'tx'),orderBy('t','desc'),limit(100)),s=>{txs=s.docs.map(d=>d.data());checkNotify();softRender()});
+    onSnapshot(collection(db,'mints'),s=>{mints=s.docs.map(d=>d.data());softRender()});
+    onSnapshot(collection(db,'stock'),s=>{stock={};s.docs.forEach(d=>stock[d.id]=d.data());softRender()});
   }
 });
 
@@ -115,6 +120,12 @@ function login(){$('#app').innerHTML=`<div class="hero"><small>BlockBank · ธ�
   $('#gl').onclick=()=>signInWithPopup(auth,new GoogleAuthProvider()).catch(fail);
   $('#gr').onclick=()=>signInWithRedirect(auth,new GoogleAuthProvider()).catch(fail)}
 
+function softRender(){
+  const ae=document.activeElement;
+  if(ae&&ae.closest&&ae.closest('#app')&&/^(INPUT|SELECT|TEXTAREA)$/.test(ae.tagName)){pendingRender=true;return}
+  render();
+}
+document.addEventListener('focusout',()=>{if(pendingRender)setTimeout(()=>{pendingRender=false;softRender()},600)});
 function render(){
   if(!me)return;if(tab==='shop'&&acting!=='me')tab='home';
   if(tab==='inv'&&acting!=='central')tab='home';
@@ -131,17 +142,18 @@ function render(){
     if(acting==='central'&&acts.central)h+=`<div class="card"><h3>ออกเหรียญเพิ่มเข้าธนาคารกลาง</h3><input id="madd" type="number" min="1" inputmode="numeric" placeholder="จำนวนเหรียญที่จะออกเพิ่ม"><input id="mnote" maxlength="100" placeholder="เหตุผล เช่น เพิ่มสภาพคล่อง"><button onclick="mintMore()">ออกเหรียญเพิ่ม</button><div class="mu" style="margin-top:6px">บันทึกถาวรและนับรวมในยอด "ออกทั้งหมด" ที่ทุกคนเห็น</div></div>`;
     h+=`<div class="card mu">เหรียญทั้งระบบ ${fmt(Object.values(acts).reduce((a,b)=>a+(b.bal||0),0))} / ออกทั้งหมด ${fmt(issued())} · สมาชิก ${Object.keys(acts).filter(i=>i!=='central').length} คน${mints.length?` · ออกเพิ่ม ${mints.length} ครั้ง`:''}<br><a href="#" onclick="signOutNow();return false" style="color:var(--mu)">ออกจากระบบ</a></div>`;
   }
-  if(tab==='shop')h+=`<div class="card"><h3>🏦 ซื้อของจากธนาคารกลาง</h3><div class="mu" style="margin-bottom:6px">ราคาขึ้นลงตามของในคลัง ยิ่งเหลือน้อยยิ่งแพง · จ่ายแล้วเจ้าของจะส่งของให้ใน Minecraft</div>${Object.keys(stock).length?PRICES.map(([n],i)=>{const s=stock[i];if(!s)return '';const p=px(s.b,s.t,s.q);return `<div class="row"><div>${n}<div class="mu">${fmt(p)} เหรียญ/ชิ้น · เหลือ ${fmt(s.q)}</div></div>${s.q>0?`<div style="display:flex;gap:6px;align-items:center"><input id="q${i}" type="number" min="1" max="${s.q}" value="1" style="width:64px;margin:0;padding:8px"><button style="width:auto;margin:0;padding:8px 14px" onclick="buy(${i})">ซื้อ</button></div>`:'<b class="out">หมด</b>'}</div>`}).join(''):'<div class="mu">ธนาคารกลางยังไม่เปิดคลังสินค้า</div>'}<div id="msg"></div></div>`;
+  if(tab==='shop'){const L=items();h+=`<div class="card"><h3>🏦 ซื้อของจากธนาคารกลาง</h3><div class="mu" style="margin-bottom:6px">ราคาขึ้นลงตามของในคลัง ยิ่งเหลือน้อยยิ่งแพง · จ่ายแล้วเจ้าของจะส่งของให้ใน Minecraft</div>${L.length?L.map(s=>`<div class="row"><div>${esc(s.name)}<div class="mu">${fmt(pr(s))} เหรียญ/ชิ้น · เหลือ ${fmt(s.q)}</div></div>${s.q>0?`<div style="display:flex;gap:6px;align-items:center"><input id="q_${s.id}" type="number" min="1" max="${s.q}" value="1" style="width:64px;margin:0;padding:8px"><button style="width:auto;margin:0;padding:8px 14px" onclick="buy('${s.id}')">ซื้อ</button></div>`:'<b class="out">หมด</b>'}</div>`).join(''):'<div class="mu">ธนาคารกลางยังไม่มีสินค้า</div>'}<div id="msg"></div></div>`}
   if(tab==='inv'){
-    const pl=Object.keys(acts).filter(i=>i!=='central').map(i=>`<option value="${i}">${esc(nm(i))}</option>`).join('');
-    h+=`<div class="card"><h3>รับซื้อของจากผู้เล่น</h3><select id="bp"><option value="">เลือกผู้เล่น</option>${pl}</select><select id="bi">${PRICES.map(([n],i)=>`<option value="${i}">${n}</option>`).join('')}</select><input id="bq" type="number" min="1" inputmode="numeric" placeholder="จำนวนชิ้น"><button onclick="bankBuyIn()">รับซื้อ (จ่ายเหรียญ + เพิ่มสต็อก)</button><div class="mu" style="margin-top:6px">จ่ายที่ 80% ของราคาขายตอนนี้ ของเข้าคลังอัตโนมัติ</div><div id="msg"></div></div>`;
-    h+=`<div class="card"><h3>คลังสินค้า</h3>${Object.keys(stock).length?PRICES.map(([n],i)=>{const s=stock[i];if(!s)return '';return `<div class="row"><div>${n}<div class="mu">ราคาขายตอนนี้ ${fmt(px(s.b,s.t,s.q))} · เป้าหมาย ${fmt(s.t)}</div></div><div style="display:flex;gap:6px;align-items:center"><input id="s${i}" type="number" min="0" value="${s.q}" style="width:72px;margin:0;padding:8px"><button style="width:auto;margin:0;padding:8px 12px" onclick="setStock(${i})">บันทึก</button></div></div>`}).join(''):'<button onclick="initStock()">เริ่มต้นคลังสินค้า</button>'}<div class="mu" style="margin-top:6px">แก้จำนวนเองได้ เช่น ของที่ฟาร์มมาเอง</div></div>`;
+    const L=items(),pl=Object.keys(acts).filter(i=>i!=='central').map(i=>`<option value="${i}">${esc(nm(i))}</option>`).join('');
+    h+=`<div class="card"><h3>รับซื้อของจากผู้เล่น</h3><select id="bp"><option value="">เลือกผู้เล่น</option>${pl}</select><select id="bi">${L.map(s=>`<option value="${s.id}">${esc(s.name)}</option>`).join('')}</select><input id="bq" type="number" min="1" inputmode="numeric" placeholder="จำนวนชิ้น"><button onclick="bankBuyIn()">รับซื้อ (จ่ายเหรียญ + เพิ่มสต็อก)</button><div class="mu" style="margin-top:6px">จ่ายที่ 80% ของราคาขายตอนนี้ ของเข้าคลังอัตโนมัติ</div><div id="msg"></div></div>`;
+    h+=`<div class="card"><h3>➕ เพิ่มไอเทมใหม่</h3><input id="nn" maxlength="60" placeholder="ชื่อไอเทม เช่น Netherite Sword / ดาบเนเธอไรต์"><input id="nb" type="number" min="1" inputmode="numeric" placeholder="ราคากลาง (เหรียญ/ชิ้น)"><input id="nt" type="number" min="1" inputmode="numeric" placeholder="สต็อกเป้าหมาย (จำนวนที่ราคาเท่าราคากลาง)"><input id="nq" type="number" min="0" inputmode="numeric" placeholder="จำนวนที่มีตอนนี้ (ไม่ใส่ = 0)"><details style="margin-top:8px"><summary class="mu">ตั้งค่าความผันผวนของราคา (ไม่บังคับ)</summary>${curveFields('n',{lo:0.5,hi:3,e:0.5})}</details><button onclick="addItem()">เพิ่มไอเทม</button></div>`;
+    h+=`<div class="card"><h3>คลังสินค้า / ตั้งราคา</h3>${L.map(s=>`<details ${openIds.has(s.id)?'open':''} ontoggle="tg('${s.id}',this.open)" style="border-bottom:1px solid var(--bd);padding:8px 0"><summary>${esc(s.name)} <span class="mu">· ${fmt(pr(s))} เหรียญ · เหลือ ${fmt(s.q)}</span></summary><div class="mu" style="margin-top:6px">ชื่อ</div><input id="${s.id}_name" value="${esc(s.name)}" maxlength="60"><div class="mu">จำนวนในคลัง</div><input id="${s.id}_q" type="number" min="0" value="${s.q}"><div class="mu">ราคากลาง</div><input id="${s.id}_b" type="number" min="1" value="${s.b}"><div class="mu">สต็อกเป้าหมาย</div><input id="${s.id}_t" type="number" min="1" value="${s.t}">${curveFields(s.id,{lo:s.lo??0.5,hi:s.hi??3,e:s.e??0.5})}<button onclick="saveItem('${s.id}')">บันทึก</button><button class="alt" onclick="delItem('${s.id}')">ลบไอเทมนี้</button></details>`).join('')}${L.length?'':'<button onclick="initStock()">เติมรายการเริ่มต้น 17 อย่าง</button>'}<div class="mu" style="margin-top:8px">ราคาตอนนี้ = ราคากลาง × (เป้าหมาย ÷ จำนวนในคลัง)^ความไว แล้วจำกัดไว้ระหว่างราคาต่ำสุด–สูงสุด ของมากกว่าเป้าหมายราคาถูกลง ของน้อยกว่าเป้าหมายราคาแพงขึ้น</div></div>`;
   }
   if(tab==='recv')h+=`<div class="card"><h3>QR รับเหรียญของ ${esc(nm(cid)==='ฉัน'?(me.displayName||'ฉัน'):nm(cid))}</h3><div id="qr"></div><div class="mu" style="margin-top:8px">ให้เพื่อนสแกนด้วยแท็บ "สแกน" หรือกล้องมือถือ ก็จะเปิดหน้าโอนพร้อมเลือกชื่อคุณให้เลย</div><button class="alt" onclick="copyLink()">คัดลอกลิงก์รับเหรียญ</button></div>`;
   if(tab==='scan')h+=`<div class="card"><h3>สแกน QR เพื่อโอน</h3><video id="v" playsinline muted></video><div id="msg" class="mu">กำลังเปิดกล้อง…</div></div>`;
   if(tab==='hist'){const mine=txs.filter(x=>x.f===cid||x.to===cid);
     h+=`<div class="card"><h3>ประวัติธุรกรรม</h3>${mine.length?mine.map(x=>{const o=x.f===cid;return `<div class="row"><div>${o?'โอนให้':'รับจาก'} ${esc(nm(o?x.to:x.f))}<div class="mu">${x.t?x.t.toDate().toLocaleString('th-TH'):''}${x.n?' · '+esc(x.n):''}</div></div><b class="${o?'out':'in'}">${o?'−':'+'}${fmt(x.a)}</b></div>`}).join(''):'<div class="mu">ยังไม่มีรายการ</div>'}</div>`}
-  if(tab==='mkt')h+=`<div class="card"><h3>ราคาตอนนี้ (เหรียญ/ชิ้น)</h3><div class="row mu"><span>ของ (เหลือในคลัง)</span><span>ธนาคารขาย / รับซื้อ</span></div>${PRICES.map(([n,b],i)=>{const s=stock[i],p=s?px(s.b,s.t,s.q):b;return `<div class="row"><span>${n}${s?` <span class="mu">(${fmt(s.q)})</span>`:''}</span><b>${fmt(p)} / ${fmt(bankBuy(p))}</b></div>`}).join('')}<div class="mu" style="margin-top:8px">ราคาปรับอัตโนมัติตามของในคลัง (0.5–3 เท่าของราคากลาง) ธนาคารรับซื้อที่ 80% ของราคาขาย อยากขายของให้ธนาคาร: ส่งของให้เจ้าของใน Minecraft แล้วเจ้าของจะบันทึกและโอนเหรียญให้</div></div>`;
+  if(tab==='mkt'){const L=items();h+=`<div class="card"><h3>ราคาตอนนี้ (เหรียญ/ชิ้น)</h3><div class="row mu"><span>ของ (เหลือในคลัง)</span><span>ธนาคารขาย / รับซื้อ</span></div>${L.length?L.map(s=>`<div class="row"><span>${esc(s.name)} <span class="mu">(${fmt(s.q)})</span></span><b>${fmt(pr(s))} / ${fmt(bankBuy(pr(s)))}</b></div>`).join(''):'<div class="mu">ยังไม่มีสินค้า</div>'}<div class="mu" style="margin-top:8px">ราคาปรับอัตโนมัติตามของในคลัง ของเยอะราคาถูก ของน้อยราคาแพง ธนาคารรับซื้อที่ 80% ของราคาขาย อยากขายของให้ธนาคาร: ส่งของให้เจ้าของใน Minecraft แล้วเจ้าของจะบันทึกและโอนเหรียญให้</div></div>`}
   $('#app').innerHTML=h;
   if(tab==='recv'){new QRCode($('#qr'),{text:payUrl(cid),width:220,height:220,correctLevel:QRCode.CorrectLevel.M})}
   if(tab==='scan')startScan();
@@ -182,33 +194,47 @@ window.send=async()=>{
   if(!to||!(a>0)){m.textContent='เลือกผู้รับและใส่จำนวนให้ถูกต้อง';return}
   if(await doTransfer(curId(),to,a,n,m)){preTo=null;const x=$('#amt'),y=$('#note');if(x)x.value='';if(y)y.value=''}
 };
-window.buy=async i=>{
-  const m=$('#msg'),k=Math.floor(+$('#q'+i).value),n=PRICES[i][0];
+const getItem=async id=>{const d=await getDoc(doc(db,'stock',id));return d.exists()?d.data():null};
+window.tg=(id,o)=>{o?openIds.add(id):openIds.delete(id)};
+window.buy=async id=>{
+  const m=$('#msg'),k=Math.floor(+$('#q_'+id).value);
   if(!(k>0)||k>10000){m.textContent='ใส่จำนวนให้ถูกต้อง';return}
-  const sd=(await getDoc(doc(db,'stock',String(i)))).data();
+  const sd=await getItem(id);
   if(!sd||sd.q<k){m.textContent='ของในคลังไม่พอ (เหลือ '+(sd?sd.q:0)+')';return}
-  const unit=px(sd.b,sd.t,sd.q),total=unit*k;
+  const unit=pr(sd),total=unit*k,n=nameOf(id,sd);
   if(!confirm('ซื้อ '+n+' ×'+k+' ราคา '+fmt(unit)+'/ชิ้น รวม '+fmt(total)+' เหรียญ?'))return;
-  if(await doTransfer(me.uid,'central',total,('ซื้อ: '+n+' ×'+k).slice(0,100),m,(b,id)=>b.update(doc(db,'stock',String(i)),{q:sd.q-k,last:id})))alert('✅ ซื้อสำเร็จ แจ้งเจ้าของธนาคารให้ส่งของใน Minecraft');
+  if(await doTransfer(me.uid,'central',total,('ซื้อ: '+n+' ×'+k).slice(0,100),m,(b,tid)=>b.update(doc(db,'stock',id),{q:sd.q-k,last:tid})))alert('✅ ซื้อสำเร็จ แจ้งเจ้าของธนาคารให้ส่งของใน Minecraft');
 };
 window.bankBuyIn=async()=>{
-  const to=$('#bp').value,i=+$('#bi').value,k=Math.floor(+$('#bq').value),m=$('#msg');
-  if(!to||!(k>0)){m.textContent='เลือกผู้เล่นและใส่จำนวน';return}
-  const sd=(await getDoc(doc(db,'stock',String(i)))).data();
-  if(!sd){m.textContent='ยังไม่ได้เริ่มต้นคลังสินค้า';return}
-  const unit=bankBuy(px(sd.b,sd.t,sd.q)),total=unit*k,n=PRICES[i][0];
+  const to=$('#bp').value,id=$('#bi').value,k=Math.floor(+$('#bq').value),m=$('#msg');
+  if(!to||!id||!(k>0)){m.textContent='เลือกผู้เล่น ไอเทม และใส่จำนวน';return}
+  const sd=await getItem(id);
+  if(!sd){m.textContent='ไม่พบไอเทมนี้ในคลัง';return}
+  const unit=bankBuy(pr(sd)),total=unit*k,n=nameOf(id,sd);
   if(!confirm('รับซื้อ '+n+' ×'+k+' จ่าย '+fmt(total)+' เหรียญ ('+fmt(unit)+'/ชิ้น)?'))return;
-  if(await doTransfer('central',to,total,('รับซื้อ: '+n+' ×'+k).slice(0,100),m,b=>b.update(doc(db,'stock',String(i)),{q:sd.q+k})))alert('✅ รับซื้อแล้ว สต็อกเพิ่ม '+k);
+  if(await doTransfer('central',to,total,('รับซื้อ: '+n+' ×'+k).slice(0,100),m,b=>b.update(doc(db,'stock',id),{q:sd.q+k})))alert('✅ รับซื้อแล้ว สต็อกเพิ่ม '+k);
 };
+const checkItem=(name,b,t,q,lo,hi,e)=>!name?'ใส่ชื่อไอเทม':!(b>=1)?'ราคากลางต้องไม่ต่ำกว่า 1':!(t>=1)?'สต็อกเป้าหมายต้องไม่ต่ำกว่า 1':!(q>=0)?'จำนวนในคลังต้องไม่ติดลบ':!(lo>0&&lo<=1)?'ราคาต่ำสุดต้องอยู่ระหว่าง 0.05–1':!(hi>=1&&hi<=20)?'ราคาสูงสุดต้องอยู่ระหว่าง 1–20':!(e>=0.1&&e<=3)?'ความไวต้องอยู่ระหว่าง 0.1–3':'';
 window.initStock=async()=>{
-  if(!confirm('เริ่มต้นคลังสินค้า (ของทุกอย่างเริ่มที่ 0 ชิ้น)?'))return;
-  const b=writeBatch(db);PRICES.forEach(([n,base,t],i)=>b.set(doc(db,'stock',String(i)),{q:0,t,b:base}));
-  try{await b.commit()}catch(e){alert('❌ '+e.message)}
+  if(!confirm('เติมรายการสินค้าเริ่มต้น 17 อย่าง (จำนวนในคลังเริ่มที่ 0)?'))return;
+  const b=writeBatch(db);PRICES.forEach(([n,base,t],i)=>b.set(doc(db,'stock',String(i)),{name:n,q:0,t,b:base,lo:0.5,hi:3,e:0.5,o:i}));
+  try{await b.commit()}catch(x){alert('❌ '+x.message)}
 };
-window.setStock=async i=>{
-  const s=stock[i],q=Math.floor(+$('#s'+i).value);
-  if(!s||!(q>=0)){alert('ใส่จำนวนให้ถูกต้อง');return}
-  try{await setDoc(doc(db,'stock',String(i)),{q,t:s.t,b:s.b})}catch(e){alert('❌ '+e.message)}
+window.addItem=async()=>{
+  const name=$('#nn').value.trim(),b=Math.floor(+$('#nb').value),t=Math.floor(+$('#nt').value),q=Math.floor(+($('#nq').value||0)),lo=+$('#n_lo').value,hi=+$('#n_hi').value,e=+$('#n_e').value;
+  const err=checkItem(name,b,t,q,lo,hi,e);if(err){alert(err);return}
+  const id='i'+Date.now().toString(36)+Math.random().toString(36).slice(2,5);
+  try{await setDoc(doc(db,'stock',id),{name,q,t,b,lo,hi,e,o:Date.now()});alert('✅ เพิ่มไอเทมแล้ว');['nn','nb','nt','nq'].forEach(x=>{const el=$('#'+x);if(el)el.value=''})}catch(x){alert('❌ '+x.message)}
+};
+window.saveItem=async id=>{
+  const g=k=>$('#'+id+'_'+k).value,name=g('name').trim(),q=Math.floor(+g('q')),b=Math.floor(+g('b')),t=Math.floor(+g('t')),lo=+g('lo'),hi=+g('hi'),e=+g('e');
+  const err=checkItem(name,b,t,q,lo,hi,e);if(err){alert(err);return}
+  const o=stock[id]&&stock[id].o!==undefined?stock[id].o:(isNaN(+id)?Date.now():+id);
+  try{await setDoc(doc(db,'stock',id),{name,q,t,b,lo,hi,e,o});alert('✅ บันทึกแล้ว')}catch(x){alert('❌ '+x.message)}
+};
+window.delItem=async id=>{
+  if(!confirm('ลบไอเทมนี้ออกจากคลัง?'))return;
+  try{await deleteDoc(doc(db,'stock',id))}catch(x){alert('❌ '+x.message)}
 };
 window.mintMore=async()=>{
   const a=Math.floor(+$('#madd').value),n=$('#mnote').value.trim().slice(0,100),m=$('#msg')||{};
